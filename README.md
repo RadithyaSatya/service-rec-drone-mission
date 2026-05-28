@@ -17,6 +17,31 @@ Perintah utama untuk menjalankan sistem:
 
 Perintah tersebut akan menjalankan `mediamtx` dan aplikasi Python secara lokal melalui Docker Compose. Script akan memakai `docker compose` bila plugin Compose v2 tersedia, lalu fallback ke `docker-compose` untuk environment Linux yang masih memakai binary lama. Mode native juga didukung dengan menjalankan `python -m app.main` jika binary lokal `ffmpeg` dan `mediamtx` sudah tersedia.
 
+Alternatif tanpa Docker:
+
+```bash
+./scripts/start-native.sh
+```
+
+Mode ini menjalankan aplikasi Python di background dan membiarkan aplikasi mengelola proses `mediamtx` dan `ffmpeg` secara native. Prasyaratnya:
+
+- `python3`
+- dependency Python dari `requirements.txt`
+- binary `ffmpeg`
+- binary `mediamtx`
+
+Untuk menghentikan mode native:
+
+```bash
+./scripts/stop-native.sh
+```
+
+Untuk follow log mode native:
+
+```bash
+./scripts/logs-native.sh
+```
+
 Identitas stream selalu di-resolve dari `GET /device-context`. Path stream lokal di MediaMTX menggunakan `resolved_uav_id` dari response backend. Jika `device-context` sementara gagal diakses, aplikasi akan fallback ke `SUBSCRIBE_UAV_ID`.
 
 ## Catatan Platform
