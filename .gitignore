@@ -1,0 +1,59 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.pycache/
+
+# Python tooling
+.python-version
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.pyre/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging artifacts
+build/
+dist/
+site/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Local runtime artifacts
+records/
+hls/
+logs/
+*.log
+*.pid
+*.pid.lock
+
+# Local healthcheck and temp files
+tmp/
+temp/
+*.tmp
+*.swp
+*.swo
+
+# Docker / Compose local overrides
+docker-compose.override.yml
+compose.override.yml
+
+# IDE / OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

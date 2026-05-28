@@ -1,0 +1,40 @@
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: uav-mediamtx
+    restart: unless-stopped
+    ports:
+      - "8554:8554"
+      - "8888:8888"
+      - "8889:8889"
+      - "9997:9997"
+      - "9998:9998"
+      - "8189:8189/udp"
+    volumes:
+      - ../app/config/mediamtx.yml:/mediamtx.yml:ro
+      - ../records:/app/records
+      - ../hls:/app/hls
+    command: ["/mediamtx", "/mediamtx.yml"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9997/v3/paths/list"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: uav-streaming-app
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      MEDIAMTX_HOST: mediamtx
+      MEDIAMTX_MANAGED: "false"
+    depends_on:
+      mediamtx:
+        condition: service_healthy
+    volumes:
+      - ..:/app
+    command: ["python", "-m", "app.main"]
