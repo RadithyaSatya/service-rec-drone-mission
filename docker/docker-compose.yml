@@ -16,12 +16,6 @@ services:
       - ../hls:/app/hls
       - ../logs:/app/logs
     command: ["/mediamtx", "/mediamtx.yml"]
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9997/v3/paths/list"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 10s
 
   app:
     build:
@@ -43,7 +37,7 @@ services:
       - "host.docker.internal:host-gateway"
     depends_on:
       mediamtx:
-        condition: service_healthy
+        condition: service_started
     volumes:
       - ..:/app
     command: ["python", "-m", "app.main"]
