@@ -61,7 +61,8 @@ class TelemetryWebSocketClient:
             except Exception as exc:
                 self._controller.on_websocket_status(False)
                 LOGGER.warning("websocket loop error", extra={"context": {"error": str(exc)}})
-                backoff.sleep()
+                delay = backoff.sleep()
+                LOGGER.info("websocket retry scheduled", extra={"context": {"delay_seconds": delay}})
             finally:
                 self._controller.on_websocket_status(False)
                 if ws is not None:
@@ -72,11 +73,11 @@ class TelemetryWebSocketClient:
 
     def _build_ws_url(self) -> str:
         token = self._request_ws_token()
-        return f"{build_ws_base_url(self._settings.base_url)}/ws/telemetry?token={token}"
+        return f"{build_ws_base_url(self._settings.resolved_base_url)}/ws/telemetry?token={token}"
 
     def _request_ws_token(self) -> str:
         response = requests.post(
-            f"{self._settings.base_url}/auth/ws-token",
+            f"{self._settings.resolved_base_url}/auth/ws-token",
             headers=self._settings.headers,
             timeout=self._settings.http_timeout_seconds,
         )
@@ -95,3 +96,4 @@ class TelemetryWebSocketClient:
     def _subscribe(self, ws: websocket.WebSocket) -> None:
         payload = {"type": "subscribe", "uav_ids": [self._settings.subscribe_uav_id]}
         ws.send(json.dumps(payload))
+        LOGGER.info("websocket subscription sent", extra={"context": {"uav_ids": payload["uav_ids"]}})

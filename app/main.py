@@ -14,7 +14,7 @@ LOGGER = get_logger(__name__)
 
 def main() -> int:
     settings = load_settings()
-    configure_logging(settings.log_level)
+    configure_logging(settings.log_level, settings.app_log_path)
 
     controller = StreamingController(settings)
     ws_client = TelemetryWebSocketClient(settings, controller)

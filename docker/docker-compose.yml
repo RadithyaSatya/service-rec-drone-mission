@@ -14,7 +14,14 @@ services:
       - ../app/config/mediamtx.yml:/mediamtx.yml:ro
       - ../records:/app/records
       - ../hls:/app/hls
+      - ../logs:/app/logs
     command: ["/mediamtx", "/mediamtx.yml"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9997/v3/paths/list"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
 
   app:
     build:
@@ -25,10 +32,24 @@ services:
     env_file:
       - ../.env
     environment:
+      DOCKERIZED: "true"
+      HOST_DOCKER_INTERNAL: host.docker.internal
       MEDIAMTX_HOST: mediamtx
       MEDIAMTX_MANAGED: "false"
+      APP_LOG_PATH: /app/logs/app.log
+      HEALTHCHECK_PATH: /app/logs/health.json
+      PYTHONUNBUFFERED: "1"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
-      - mediamtx
+      mediamtx:
+        condition: service_healthy
     volumes:
       - ..:/app
     command: ["python", "-m", "app.main"]
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.streaming.healthcheck"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s

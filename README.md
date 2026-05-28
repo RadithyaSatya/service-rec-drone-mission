@@ -15,37 +15,20 @@ Perintah utama untuk menjalankan sistem:
 ./scripts/start.sh
 ```
 
-Perintah tersebut akan menjalankan `mediamtx` dan aplikasi Python secara lokal melalui Docker Compose. Script akan memakai `docker compose` bila plugin Compose v2 tersedia, lalu fallback ke `docker-compose` untuk environment Linux yang masih memakai binary lama. Mode native juga didukung dengan menjalankan `python -m app.main` jika binary lokal `ffmpeg` dan `mediamtx` sudah tersedia.
+Perintah tersebut akan menjalankan `mediamtx` dan aplikasi Python melalui Docker Compose. Script akan memakai `docker compose` bila plugin Compose v2 tersedia, lalu fallback ke `docker-compose` untuk environment Linux yang masih memakai binary lama.
 
-Alternatif tanpa Docker:
-
-```bash
-./scripts/start-native.sh
-```
-
-Mode ini menjalankan aplikasi Python di background dan membiarkan aplikasi mengelola proses `mediamtx` dan `ffmpeg` secara native. Prasyaratnya:
-
-- `python3`
-- binary `ffmpeg`
-- binary `mediamtx`
-
-Saat `./scripts/start-native.sh` dijalankan, script akan:
-
-- mengecek dependency Python dari `requirements.txt`
-- mencoba install otomatis hanya jika ada dependency yang belum terpasang dan internet tersedia
-- skip proses install bila offline, lalu tetap lanjut start agar tidak gagal hanya karena percobaan install
-
-Untuk menghentikan mode native:
+Untuk follow log file project:
 
 ```bash
-./scripts/stop-native.sh
+./scripts/logs.sh
 ```
 
-Untuk follow log mode native:
+File log utama:
 
-```bash
-./scripts/logs-native.sh
-```
+- `logs/app.log`: event aplikasi, retry websocket, publish status, URL stream, dan health event
+- `logs/ffmpeg.stdout.log`: output `ffmpeg`
+- `logs/ffmpeg.stderr.log`: error output `ffmpeg`
+- `logs/health.json`: snapshot healthcheck terakhir
 
 Identitas stream selalu di-resolve dari `GET /device-context`. Path stream lokal di MediaMTX menggunakan `resolved_uav_id` dari response backend. Jika `device-context` sementara gagal diakses, aplikasi akan fallback ke `SUBSCRIBE_UAV_ID`.
 
@@ -54,7 +37,6 @@ Identitas stream selalu di-resolve dari `GET /device-context`. Path stream lokal
 Desain ini ditujukan untuk berjalan di macOS maupun Linux.
 
 - Mode yang direkomendasikan di kedua platform adalah `docker compose`.
-- Mode native juga didukung jika `ffmpeg` dan `mediamtx` terpasang lokal.
 - Karena sumber ingest sekarang fixed ke `RTSP_URL`, tidak ada lagi percabangan capture kamera spesifik platform di dalam aplikasi.
 - Raspberry Pi diperlakukan sebagai target deployment Linux. Batasan utamanya ada di beban CPU jika codec diubah dari `copy` ke `libx264`.
 
@@ -370,6 +352,11 @@ Service:
 - `mediamtx`: image resmi MediaMTX, mengekspose RTSP/HLS/WebRTC/API/metrics, serta menyimpan recording dan aset HLS lewat volume mount
 - `app`: orkestrator Python dengan FFmpeg terpasang, bergantung pada health MediaMTX
 
+Perilaku jaringan Docker:
+
+- jika `BASE_URL` atau `RTSP_URL` masih memakai `localhost` atau `127.0.0.1`, container `app` akan me-resolve host tersebut ke `host.docker.internal`
+- ini membuat service lokal host dan stream lokal host tetap bisa diakses dari dalam container tanpa patch `.env` tambahan
+
 Port yang diekspos:
 
 - `8554` RTSP
@@ -415,12 +402,6 @@ Mode Docker:
 ./scripts/healthcheck.sh
 ./scripts/stop.sh
 ```
-
-Mode native:
-
-1. Pasang `ffmpeg` dan `mediamtx`
-2. Set `MEDIAMTX_MANAGED=true` di `.env`
-3. Jalankan `python -m app.main`
 
 Endpoint penting setelah boot:
 

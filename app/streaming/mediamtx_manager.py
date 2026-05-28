@@ -40,12 +40,19 @@ class MediaMTXManager:
     def wait_until_ready(self) -> None:
         deadline = time.time() + self._settings.mediamtx_ready_timeout_seconds
         last_error: Exception | None = None
+        attempt = 0
         while time.time() < deadline:
+            attempt += 1
             try:
                 if self.is_healthy():
+                    LOGGER.info("mediamtx ready", extra={"context": {"attempt": attempt}})
                     return
             except Exception as exc:  # pragma: no cover - startup probe
                 last_error = exc
+                LOGGER.info(
+                    "mediamtx healthcheck retry",
+                    extra={"context": {"attempt": attempt, "error": str(exc)}},
+                )
             time.sleep(1)
         raise RuntimeError(f"MediaMTX did not become ready: {last_error}")
 
@@ -63,3 +70,16 @@ class MediaMTXManager:
             time.sleep(self._settings.mediamtx_restart_delay_seconds)
             self._process.start()
         self.wait_until_ready()
+
+    def is_publish_ready(self, path_name: str) -> bool:
+        response = requests.get(
+            f"{self._settings.mediamtx_api_url}/v3/paths/list",
+            timeout=self._settings.http_timeout_seconds,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        for item in payload.get("items", []):
+            if item.get("name") != path_name:
+                continue
+            return bool(item.get("sourceReady"))
+        return False

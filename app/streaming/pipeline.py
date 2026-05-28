@@ -29,6 +29,7 @@ class StreamingController:
         self._running = False
         self._drone_id: str | None = None
         self._publisher: FFmpegManager | None = None
+        self._publish_ready: bool | None = None
 
     @property
     def drone_id(self) -> str:
@@ -47,6 +48,8 @@ class StreamingController:
             extra={
                 "context": {
                     "drone_id": self._drone_id,
+                    "base_url": self._settings.resolved_base_url,
+                    "source_url": self._settings.resolved_rtsp_url,
                     "publish_url": self._settings.mediamtx_publish_url(self._drone_id),
                     "hls_url": self._settings.mediamtx_hls_url(self._drone_id),
                 }
@@ -125,15 +128,28 @@ class StreamingController:
             if snapshot.runtime_state == MissionRuntimeState.DISCONNECTED:
                 self._publisher.stop()
                 self._state.update_publisher(False)
+                self._set_publish_ready(False, reason="vehicle-disconnected")
                 return
 
             profile = StreamProfile.MISSION if snapshot.mission_active else StreamProfile.IDLE
             if profile == StreamProfile.IDLE and not self._settings.idle_stream_enabled:
                 self._publisher.stop()
                 self._state.update_publisher(False)
+                self._set_publish_ready(False, reason="idle-stream-disabled")
                 return
             self._publisher.ensure_profile(profile)
-            self._state.update_publisher(self._publisher.is_running())
+            publisher_running = self._publisher.is_running()
+            self._state.update_publisher(publisher_running)
+            if not publisher_running:
+                self._set_publish_ready(False, reason="publisher-not-running")
+                return
+
+            path_name = self._settings.stream_name_template.format(drone_id=self.drone_id).lstrip("/")
+            try:
+                publish_ready = self._mediamtx.is_publish_ready(path_name)
+                self._set_publish_ready(publish_ready, profile=profile)
+            except Exception as exc:
+                LOGGER.warning("publish healthcheck failed", extra={"context": {"error": str(exc)}})
 
     def _close_recording_if_needed(self) -> None:
         finalized_dir = self._recorder.stop_session()
@@ -143,7 +159,7 @@ class StreamingController:
     def _resolve_drone_id(self) -> str:
         try:
             response = requests.get(
-                f"{self._settings.base_url}/device-context",
+                f"{self._settings.resolved_base_url}/device-context",
                 headers=self._settings.headers,
                 timeout=self._settings.http_timeout_seconds,
             )
@@ -163,7 +179,7 @@ class StreamingController:
     def _fetch_active_history_id(self) -> int | None:
         try:
             response = requests.get(
-                f"{self._settings.base_url}/mission/current",
+                f"{self._settings.resolved_base_url}/mission/current",
                 headers=self._settings.headers,
                 timeout=self._settings.http_timeout_seconds,
             )
@@ -176,6 +192,22 @@ class StreamingController:
         except Exception as exc:
             LOGGER.warning("failed to fetch active mission", extra={"context": {"error": str(exc)}})
             return None
+
+    def _set_publish_ready(self, ready: bool, profile: StreamProfile | None = None, reason: str | None = None) -> None:
+        if self._publish_ready == ready:
+            return
+        self._publish_ready = ready
+        context = {
+            "ready": ready,
+            "publish_url": self._settings.mediamtx_publish_url(self.drone_id),
+            "hls_url": self._settings.mediamtx_hls_url(self.drone_id),
+            "webrtc_url": self._settings.mediamtx_webrtc_url(self.drone_id),
+        }
+        if profile is not None:
+            context["profile"] = profile.value
+        if reason is not None:
+            context["reason"] = reason
+        LOGGER.info("publish status changed", extra={"context": context})
 
 
 def build_ws_base_url(base_url: str) -> str:

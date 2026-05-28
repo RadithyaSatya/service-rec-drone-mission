@@ -7,17 +7,12 @@ cd "$ROOT_DIR"
 mkdir -p logs
 
 touch \
-  logs/app.stdout.log \
-  logs/app.stderr.log \
-  logs/mediamtx.stdout.log \
-  logs/mediamtx.stderr.log \
+  logs/app.log \
   logs/ffmpeg.stdout.log \
-  logs/ffmpeg.stderr.log
+  logs/ffmpeg.stderr.log \
+  logs/health.json
 
 tail -n "${TAIL_LINES:-100}" -f \
-  logs/app.stdout.log \
-  logs/app.stderr.log \
-  logs/mediamtx.stdout.log \
-  logs/mediamtx.stderr.log \
+  logs/app.log \
   logs/ffmpeg.stdout.log \
   logs/ffmpeg.stderr.log

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 from app.config.constants import VideoCodec
 
@@ -24,10 +25,28 @@ def _float(name: str, default: float) -> float:
     return float(value) if value is not None else default
 
 
+def _rewrite_localhost_url(url: str, host_gateway_name: str) -> str:
+    parsed = urlparse(url)
+    if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        return url
+
+    netloc = host_gateway_name
+    if parsed.port is not None:
+        netloc = f"{netloc}:{parsed.port}"
+    if parsed.username:
+        auth = parsed.username
+        if parsed.password:
+            auth = f"{auth}:{parsed.password}"
+        netloc = f"{auth}@{netloc}"
+    return urlunparse(parsed._replace(netloc=netloc))
+
+
 @dataclass(slots=True)
 class Settings:
     app_name: str = os.getenv("APP_NAME", "uav-streaming-system")
     base_url: str = os.getenv("BASE_URL", "http://127.0.0.1:8081")
+    dockerized: bool = _bool("DOCKERIZED", False)
+    host_gateway_name: str = os.getenv("HOST_DOCKER_INTERNAL", "host.docker.internal")
     token: str = os.getenv("TOKEN", "uav-local-dev-token")
     subscribe_uav_id: int = _int("SUBSCRIBE_UAV_ID", 1)
 
@@ -73,6 +92,7 @@ class Settings:
     hls_dir: str = os.getenv("HLS_DIR", "./hls")
     logs_dir: str = os.getenv("LOGS_DIR", "./logs")
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
+    app_log_path: str = os.getenv("APP_LOG_PATH", "./logs/app.log")
     healthcheck_path: str = os.getenv("HEALTHCHECK_PATH", "./logs/health.json")
     record_segment_grace_seconds: int = _int("RECORD_SEGMENT_GRACE_SECONDS", 3)
 
@@ -84,6 +104,18 @@ class Settings:
     @property
     def headers(self) -> dict[str, str]:
         return {"X-Device-Token": self.token}
+
+    @property
+    def resolved_base_url(self) -> str:
+        if not self.dockerized:
+            return self.base_url
+        return _rewrite_localhost_url(self.base_url, self.host_gateway_name)
+
+    @property
+    def resolved_rtsp_url(self) -> str:
+        if not self.dockerized:
+            return self.rtsp_url
+        return _rewrite_localhost_url(self.rtsp_url, self.host_gateway_name)
 
     @property
     def mediamtx_api_url(self) -> str:
