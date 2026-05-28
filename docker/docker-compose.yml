@@ -15,11 +15,6 @@ services:
       - ../records:/app/records
       - ../hls:/app/hls
     command: ["/mediamtx", "/mediamtx.yml"]
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9997/v3/paths/list"]
-      interval: 10s
-      timeout: 3s
-      retries: 6
 
   app:
     build:
@@ -33,8 +28,7 @@ services:
       MEDIAMTX_HOST: mediamtx
       MEDIAMTX_MANAGED: "false"
     depends_on:
-      mediamtx:
-        condition: service_healthy
+      - mediamtx
     volumes:
       - ..:/app
     command: ["python", "-m", "app.main"]
