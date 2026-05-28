@@ -26,9 +26,14 @@ Alternatif tanpa Docker:
 Mode ini menjalankan aplikasi Python di background dan membiarkan aplikasi mengelola proses `mediamtx` dan `ffmpeg` secara native. Prasyaratnya:
 
 - `python3`
-- dependency Python dari `requirements.txt`
 - binary `ffmpeg`
 - binary `mediamtx`
+
+Saat `./scripts/start-native.sh` dijalankan, script akan:
+
+- mengecek dependency Python dari `requirements.txt`
+- mencoba install otomatis hanya jika ada dependency yang belum terpasang dan internet tersedia
+- skip proses install bila offline, lalu tetap lanjut start agar tidak gagal hanya karena percobaan install
 
 Untuk menghentikan mode native:
 
