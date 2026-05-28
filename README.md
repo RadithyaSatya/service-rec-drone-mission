@@ -15,7 +15,7 @@ Perintah utama untuk menjalankan sistem:
 ./scripts/start.sh
 ```
 
-Perintah tersebut akan menjalankan `mediamtx` dan aplikasi Python secara lokal melalui Docker Compose. Mode native juga didukung dengan menjalankan `python -m app.main` jika binary lokal `ffmpeg` dan `mediamtx` sudah tersedia.
+Perintah tersebut akan menjalankan `mediamtx` dan aplikasi Python secara lokal melalui Docker Compose. Script akan memakai `docker compose` bila plugin Compose v2 tersedia, lalu fallback ke `docker-compose` untuk environment Linux yang masih memakai binary lama. Mode native juga didukung dengan menjalankan `python -m app.main` jika binary lokal `ffmpeg` dan `mediamtx` sudah tersedia.
 
 Identitas stream selalu di-resolve dari `GET /device-context`. Path stream lokal di MediaMTX menggunakan `resolved_uav_id` dari response backend. Jika `device-context` sementara gagal diakses, aplikasi akan fallback ke `SUBSCRIBE_UAV_ID`.
 
