@@ -72,8 +72,13 @@ class ManagedProcess:
 
         LOGGER.info("stopping process", extra={"context": {"process": self._spec.name, "pid": process.pid}})
         try:
+            if process.poll() is not None:
+                return
             if os.name != "nt":
-                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    return
             else:
                 process.terminate()
             process.wait(timeout=kill_after_seconds)
@@ -83,7 +88,10 @@ class ManagedProcess:
                 extra={"context": {"process": self._spec.name, "pid": process.pid}},
             )
             if os.name != "nt":
-                os.killpg(process.pid, signal.SIGKILL)
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    return
             else:
                 process.kill()
             process.wait(timeout=5)

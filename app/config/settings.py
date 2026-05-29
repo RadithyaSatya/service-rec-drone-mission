@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlparse, urlunparse
 
 from app.config.constants import VideoCodec
 
@@ -25,28 +24,10 @@ def _float(name: str, default: float) -> float:
     return float(value) if value is not None else default
 
 
-def _rewrite_localhost_url(url: str, host_gateway_name: str) -> str:
-    parsed = urlparse(url)
-    if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
-        return url
-
-    netloc = host_gateway_name
-    if parsed.port is not None:
-        netloc = f"{netloc}:{parsed.port}"
-    if parsed.username:
-        auth = parsed.username
-        if parsed.password:
-            auth = f"{auth}:{parsed.password}"
-        netloc = f"{auth}@{netloc}"
-    return urlunparse(parsed._replace(netloc=netloc))
-
-
 @dataclass(slots=True)
 class Settings:
     app_name: str = os.getenv("APP_NAME", "uav-streaming-system")
     base_url: str = os.getenv("BASE_URL", "http://127.0.0.1:8081")
-    dockerized: bool = _bool("DOCKERIZED", False)
-    host_gateway_name: str = os.getenv("HOST_DOCKER_INTERNAL", "host.docker.internal")
     token: str = os.getenv("TOKEN", "uav-local-dev-token")
     subscribe_uav_id: int = _int("SUBSCRIBE_UAV_ID", 1)
 
@@ -56,47 +37,36 @@ class Settings:
     http_timeout_seconds: int = _int("HTTP_TIMEOUT_SECONDS", 10)
     startup_source_settle_seconds: float = _float("START_DELAY_SECONDS", 1.5)
 
-    mediamtx_host: str = os.getenv("MEDIAMTX_HOST", "127.0.0.1")
-    mediamtx_rtsp_port: int = _int("MEDIAMTX_RTSP_PORT", 8554)
-    mediamtx_hls_port: int = _int("MEDIAMTX_HLS_PORT", 8888)
-    mediamtx_webrtc_port: int = _int("MEDIAMTX_WEBRTC_PORT", 8889)
-    mediamtx_api_port: int = _int("MEDIAMTX_API_PORT", 9997)
-    mediamtx_metrics_port: int = _int("MEDIAMTX_METRICS_PORT", 9998)
-    mediamtx_managed: bool = _bool("MEDIAMTX_MANAGED", False)
-    mediamtx_binary: str = os.getenv("MEDIAMTX_BIN", "mediamtx")
-    mediamtx_config_path: str = os.getenv("MEDIAMTX_CONFIG_PATH", "./app/config/mediamtx.yml")
-    mediamtx_ready_timeout_seconds: int = _int("MEDIAMTX_READY_TIMEOUT_SECONDS", 30)
-    mediamtx_restart_delay_seconds: int = _int("MEDIAMTX_RESTART_DELAY_SECONDS", 3)
-
     ffmpeg_binary: str = os.getenv("FFMPEG_BIN", "ffmpeg")
     ffprobe_binary: str = os.getenv("FFPROBE_BIN", "ffprobe")
     rtsp_url: str = os.getenv("RTSP_URL", "rtsp://192.168.144.25:8554/main.264")
-    stream_name_template: str = os.getenv("STREAM_NAME_TEMPLATE", "uav/{drone_id}/live")
     ffmpeg_codec: VideoCodec = VideoCodec(os.getenv("FFMPEG_CODEC", "copy"))
     ffmpeg_bitrate: str = os.getenv("FFMPEG_BITRATE", "2500k")
     ffmpeg_maxrate: str = os.getenv("FFMPEG_MAXRATE", "3000k")
     ffmpeg_bufsize: str = os.getenv("FFMPEG_BUFSIZE", "5000k")
-    ffmpeg_preset: str = os.getenv("FFMPEG_PRESET", "veryfast")
+    ffmpeg_preset: str = os.getenv("FFMPEG_PRESET", "ultrafast")
     ffmpeg_tune: str = os.getenv("FFMPEG_TUNE", "zerolatency")
     ffmpeg_gop: int = _int("FFMPEG_GOP", 30)
     ffmpeg_profile: str = os.getenv("FFMPEG_PROFILE", "baseline")
     ffmpeg_level: str = os.getenv("FFMPEG_LEVEL", "3.1")
     ffmpeg_transport: str = os.getenv("FFMPEG_RTSP_TRANSPORT", "tcp")
     ffmpeg_loglevel: str = os.getenv("FFMPEG_LOGLEVEL", "warning")
-    publisher_restart_backoff_seconds: int = _int("FORWARD_RESTART_DELAY_SECONDS", 5)
+    publisher_restart_backoff_seconds: int = _int("FFMPEG_RESTART_DELAY_SECONDS", 5)
     idle_stream_enabled: bool = _bool("IDLE_STREAM_ENABLED", True)
     mission_start_grace_seconds: float = _float("MISSION_START_GRACE_SECONDS", 1.0)
+    hls_time_seconds: int = _int("HLS_TIME_SECONDS", 1)
+    hls_list_size: int = _int("HLS_LIST_SIZE", 4)
+    hls_delete_threshold: int = _int("HLS_DELETE_THRESHOLD", 1)
+    server_host: str = os.getenv("SERVER_HOST", "0.0.0.0")
+    server_port: int = _int("SERVER_PORT", 8088)
+    public_base_url: str = os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8088")
 
     records_dir: str = os.getenv("RECORDS_DIR", "./records")
-    raw_records_dir: str = os.getenv("RAW_RECORDS_DIR", "./records/_raw")
     hls_dir: str = os.getenv("HLS_DIR", "./hls")
     logs_dir: str = os.getenv("LOGS_DIR", "./logs")
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     app_log_path: str = os.getenv("APP_LOG_PATH", "./logs/app.log")
-    healthcheck_path: str = os.getenv("HEALTHCHECK_PATH", "./logs/health.json")
-    record_segment_grace_seconds: int = _int("RECORD_SEGMENT_GRACE_SECONDS", 3)
 
-    docker_compose_project: str = os.getenv("COMPOSE_PROJECT_NAME", "uav-streaming-system")
     supported_platforms: tuple[str, ...] = field(
         default=("macos", "linux", "raspberry-pi"), init=False
     )
@@ -107,38 +77,27 @@ class Settings:
 
     @property
     def resolved_base_url(self) -> str:
-        if not self.dockerized:
-            return self.base_url
-        return _rewrite_localhost_url(self.base_url, self.host_gateway_name)
+        return self.base_url
 
     @property
     def resolved_rtsp_url(self) -> str:
-        if not self.dockerized:
-            return self.rtsp_url
-        return _rewrite_localhost_url(self.rtsp_url, self.host_gateway_name)
+        return self.rtsp_url
+
+    def hls_output_dir(self, drone_id: str) -> Path:
+        return Path(self.hls_dir) / "uav" / str(drone_id)
+
+    def hls_playlist_path(self, drone_id: str) -> Path:
+        return self.hls_output_dir(drone_id) / "index.m3u8"
+
+    def hls_playlist_url(self, drone_id: str) -> str:
+        return f"{self.public_base_url.rstrip('/')}/hls/uav/{drone_id}/index.m3u8"
 
     @property
-    def mediamtx_api_url(self) -> str:
-        return f"http://{self.mediamtx_host}:{self.mediamtx_api_port}"
-
-    @property
-    def mediamtx_metrics_url(self) -> str:
-        return f"http://{self.mediamtx_host}:{self.mediamtx_metrics_port}/metrics"
-
-    def mediamtx_publish_url(self, drone_id: str) -> str:
-        path = self.stream_name_template.format(drone_id=drone_id).lstrip("/")
-        return f"rtsp://{self.mediamtx_host}:{self.mediamtx_rtsp_port}/{path}"
-
-    def mediamtx_hls_url(self, drone_id: str) -> str:
-        path = self.stream_name_template.format(drone_id=drone_id).lstrip("/")
-        return f"http://{self.mediamtx_host}:{self.mediamtx_hls_port}/{path}/index.m3u8"
-
-    def mediamtx_webrtc_url(self, drone_id: str) -> str:
-        path = self.stream_name_template.format(drone_id=drone_id).lstrip("/")
-        return f"http://{self.mediamtx_host}:{self.mediamtx_webrtc_port}/{path}/whep"
+    def player_url(self) -> str:
+        return f"{self.public_base_url.rstrip('/')}/player"
 
     def ensure_runtime_dirs(self) -> None:
-        for value in (self.records_dir, self.raw_records_dir, self.hls_dir, self.logs_dir):
+        for value in (self.records_dir, self.hls_dir, self.logs_dir):
             Path(value).mkdir(parents=True, exist_ok=True)
 
 

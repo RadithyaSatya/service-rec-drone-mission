@@ -48,12 +48,10 @@ temp/
 *.swp
 *.swo
 
-# Docker / Compose local overrides
-docker-compose.override.yml
-compose.override.yml
-
 # IDE / OS files
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
+
+.env

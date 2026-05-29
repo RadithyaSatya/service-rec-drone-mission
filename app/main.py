@@ -5,6 +5,7 @@ import threading
 import time
 
 from app.config.settings import load_settings
+from app.http_server import LocalHttpServer
 from app.streaming.pipeline import StreamingController
 from app.utils.logger import configure_logging, get_logger
 from app.websocket.client import TelemetryWebSocketClient
@@ -17,6 +18,7 @@ def main() -> int:
     configure_logging(settings.log_level, settings.app_log_path)
 
     controller = StreamingController(settings)
+    http_server = LocalHttpServer(settings, controller)
     ws_client = TelemetryWebSocketClient(settings, controller)
     stop_event = threading.Event()
 
@@ -29,13 +31,16 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _handle_signal)
 
     controller.start()
+    http_server.start()
     ws_client.start()
 
     try:
         while not stop_event.is_set():
+            controller.tick()
             time.sleep(1)
     finally:
         ws_client.stop()
+        http_server.stop()
         controller.stop()
     return 0
 

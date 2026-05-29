@@ -1,432 +1,363 @@
 # Sistem Streaming UAV Lokal
 
-## Ringkasan
+Service ini sekarang murni lokal dan tidak memakai Docker.
 
-Repository ini berisi stack streaming UAV lokal yang memisahkan kontrol mission, telemetry, publish media, dan distribusi media ke modul yang jelas.
+Flow runtime:
 
-- Python menangani orkestrasi, telemetry websocket, state mission, dan supervisi proses.
-- FFmpeg hanya mengambil sumber RTSP dari kamera/HM30 lalu mem-publish satu stream RTSP lokal ke MediaMTX.
-- MediaMTX menangani fanout RTSP lokal, HLS, WebRTC opsional, `Control API`, `Metrics`, dan rekaman raw `fMP4`.
-- Finalisasi rekaman mission ditangani Python dengan mengambil fragmen `.mp4` hasil MediaMTX lalu menyusunnya ke folder mission.
+```text
+RTSP camera
+-> FFmpeg
+-> HLS di ./hls
+-> FastAPI serve /hls dan /player
 
-Perintah utama untuk menjalankan sistem:
-
-```bash
-./scripts/start.sh
+saat mission aktif
+-> FFmpeg juga menulis MP4 ke ./records
 ```
 
-Perintah tersebut akan menjalankan `mediamtx` dan aplikasi Python melalui Docker Compose. Script akan memakai `docker compose` bila plugin Compose v2 tersedia, lalu fallback ke `docker-compose` untuk environment Linux yang masih memakai binary lama.
+Komponen yang tetap dipakai:
+- websocket telemetry client
+- mission event handling
+- process manager FFmpeg
+- graceful shutdown
 
-Untuk follow log file project:
-
-```bash
-./scripts/logs.sh
-```
-
-File log utama:
-
-- `logs/app.log`: event aplikasi, retry websocket, publish status, URL stream, dan health event
-- `logs/ffmpeg.stdout.log`: output `ffmpeg`
-- `logs/ffmpeg.stderr.log`: error output `ffmpeg`
-- `logs/health.json`: snapshot healthcheck terakhir
-
-Identitas stream selalu di-resolve dari `GET /device-context`. Path stream lokal di MediaMTX menggunakan `resolved_uav_id` dari response backend. Jika `device-context` sementara gagal diakses, aplikasi akan fallback ke `SUBSCRIBE_UAV_ID`.
-
-## Catatan Platform
-
-Desain ini ditujukan untuk berjalan di macOS maupun Linux.
-
-- Mode yang direkomendasikan di kedua platform adalah `docker compose`.
-- Karena sumber ingest sekarang fixed ke `RTSP_URL`, tidak ada lagi percabangan capture kamera spesifik platform di dalam aplikasi.
-- Raspberry Pi diperlakukan sebagai target deployment Linux. Batasan utamanya ada di beban CPU jika codec diubah dari `copy` ke `libx264`.
-
-## Kenapa Arsitektur Ini Dipakai
-
-MediaMTX lebih tepat menangani recording dibanding FFmpeg karena recording berada di sisi downstream publish, bukan di tahap ingest. Dengan recording dipindahkan ke MediaMTX:
-
-- konfigurasi tee-mux FFmpeg menjadi tidak perlu
-- risiko double pipeline encode berkurang
-- domain kegagalan lebih kecil
-- RTSP, HLS, WebRTC, API, metrics, dan recording melihat state stream yang sama
-
-FFmpeg jadi fokus pada satu pekerjaan: menjaga ingest sumber tetap stabil lalu mem-publish ke MediaMTX lokal.
-
-Arsitektur ini juga lebih baik dibanding pendekatan monolitik sebelumnya karena auth HTTP, reconnect websocket, logika mission, publish RTSP, recording file, dan supervisi proses dipisahkan ke komponen yang eksplisit:
-
-- supervisi transport di `app/streaming`
-- keputusan mission di `app/mission`
-- parsing dan routing telemetry di `app/telemetry` dan `app/websocket`
-- konfigurasi deployment dan runtime di `app/config`
-
-Pemisahan ini membuat crash recovery, kepemilikan tunggal proses FFmpeg, dan health checking lebih aman.
+Komponen yang sudah dihapus:
+- Docker
+- Docker Compose
+- MediaMTX
+- RTSP republish
+- remote streaming
 
 ## Struktur Folder
 
 ```text
-uav-streaming-system/
+service-rec-drone-mission/
+├── app.py
 ├── app/
 │   ├── main.py
-│   ├── websocket/
-│   │   ├── client.py
-│   │   ├── handlers.py
-│   │   └── reconnect.py
+│   ├── http_server.py
+│   ├── config/
+│   │   ├── constants.py
+│   │   └── settings.py
+│   ├── mission/
+│   │   └── mission_events.py
 │   ├── streaming/
 │   │   ├── ffmpeg_manager.py
-│   │   ├── mediamtx_manager.py
-│   │   ├── recorder.py
-│   │   ├── pipeline.py
-│   │   └── healthcheck.py
-│   ├── mission/
-│   │   ├── mission_state.py
-│   │   ├── mission_events.py
-│   │   └── state_machine.py
-│   ├── config/
-│   │   ├── settings.py
-│   │   ├── constants.py
-│   │   └── mediamtx.yml
+│   │   └── pipeline.py
 │   ├── telemetry/
 │   │   ├── models.py
 │   │   └── parser.py
-│   └── utils/
-│       ├── logger.py
-│       ├── process.py
-│       ├── retry.py
-│       └── time.py
-├── records/
-├── hls/
-├── logs/
-├── docker/
-│   ├── Dockerfile
-│   └── docker-compose.yml
+│   ├── utils/
+│   │   ├── logger.py
+│   │   ├── process.py
+│   │   ├── retry.py
+│   │   └── time.py
+│   └── websocket/
+│       ├── client.py
+│       ├── handlers.py
+│       └── reconnect.py
 ├── scripts/
 │   ├── start.sh
-│   ├── stop.sh
-│   └── healthcheck.sh
+│   └── stop.sh
+├── hls/
+├── records/
+├── logs/
+├── run/
 ├── requirements.txt
-└── .env
+├── .env
+└── .env.example
 ```
 
-## Tanggung Jawab Modul
-
-### `app/main.py`
-
-Bootstrap proses, penanganan signal, startup controller, startup websocket, dan graceful shutdown.
-
-### `app/websocket`
-
-- `client.py`: mengambil token WS, subscribe, loop reconnect, heartbeat ping, dan timeout handling
-- `handlers.py`: merutekan `vehicle_state` dan `mission_event` ke controller
-- `reconnect.py`: kebijakan backoff reconnect
-
-### `app/streaming`
-
-- `mediamtx_manager.py`: menjalankan MediaMTX pada mode native, melakukan health check `Control API`, menunggu readiness, dan restart bila managed mode aktif
-- `ffmpeg_manager.py`: memiliki satu proses publisher FFmpeg dan membangun command RTSP ingest -> RTSP publish lokal ke MediaMTX
-- `recorder.py`: melacak awal/akhir mission lalu mengambil fragmen raw recording MediaMTX ke `records/drone_<id>/<year>/<month>/mission_<history_id>/`
-- `pipeline.py`: orkestrator utama yang mengonsumsi telemetry dan mission event, menjaga state machine tetap konsisten, lalu menyamakan desired state dengan proses yang benar-benar berjalan
-- `healthcheck.py`: probe lokal sederhana untuk API dan metrics MediaMTX
-
-### `app/mission`
-
-- `mission_state.py`: model snapshot runtime
-- `mission_events.py`: daftar event canonical untuk start/stop mission
-- `state_machine.py`: transisi state yang thread-safe antara `IDLE`, `CONNECTED`, `STREAMING`, `RECORDING`, dan `DISCONNECTED`
-
-### `app/config`
-
-- `settings.py`: konfigurasi berbasis environment dan path runtime lokal
-- `constants.py`: enum state runtime dan codec
-- `mediamtx.yml`: konfigurasi server MediaMTX lokal
-
-### `app/telemetry`
-
-- `models.py`: model envelope untuk `vehicle_state` dan `mission_event`
-- `parser.py`: parsing aman dari payload websocket
-
-### `app/utils`
-
-Helper bersama untuk logging, lifecycle subprocess, backoff, dan waktu.
-
-## Logika State Machine
-
-State runtime dibuat sesederhana mungkin:
-
-- `DISCONNECTED`: websocket putus atau heartbeat UAV menunjukkan `connected=false`
-- `CONNECTED`: koneksi sehat pertama setelah startup, tetapi idle publish belum benar-benar aktif
-- `STREAMING`: websocket sehat, vehicle sehat, mission tidak aktif, dan idle publish aktif
-- `RECORDING`: mission aktif dan sesi recorder sedang terbuka
-- `IDLE`: baseline awal sebelum konektivitas terbentuk
-
-Keputusan mission datang dari dua channel telemetry:
-
-- `vehicle_state` menentukan konektivitas dan nilai `in_mission`
-- `mission_event` menentukan batas lifecycle dan `history_id`
-
-Controller akan melakukan reconcile setiap kali ada perubahan state. Artinya, tidak ada timer tersembunyi yang memutuskan apakah FFmpeg harus hidup atau mati; sumber kebenarannya tetap telemetry.
-
-## Logika Orkestrasi Proses
-
-Alur saat startup:
-
-1. Membuat runtime directory
-2. Resolve UAV ID dari `GET /device-context`, dengan fallback ke `SUBSCRIBE_UAV_ID`
-3. Menjalankan atau mengecek MediaMTX
-4. Menunggu `GET /v3/paths/list` di port `9997`
-5. Menjalankan websocket client
-6. Menunggu telemetry lalu masuk ke mode idle streaming saat vehicle terhubung
-
-Alur saat mission mulai:
-
-1. Menerima `vehicle_state.in_mission=true` atau `mission_event` seperti `takeoff`
-2. Resolve `history_id` dari payload event atau `GET /mission/current`
-3. Membuka sesi recorder
-4. Menjaga RTSP publisher tetap hidup ke path MediaMTX yang sama
-5. HLS dan WebRTC opsional otomatis tersedia dari MediaMTX pada path yang sama
-
-Alur saat mission selesai:
-
-1. Menerima `landed`, `mission_failed`, `mission_aborted`, atau `mission_completed`
-2. Menutup sesi recorder
-3. Mengambil fragmen raw `.mp4` MediaMTX ke folder target mission
-4. Menjaga idle publish tetap hidup jika `IDLE_STREAM_ENABLED=true`
-
-Alur saat disconnect:
-
-1. WebSocket putus atau `vehicle_state.connected=false`
-2. Menghentikan FFmpeg
-3. Menjaga fragmen recording yang sudah sempat di-flush MediaMTX
-4. Reconnect websocket dengan exponential backoff
-
-## Konfigurasi MediaMTX
-
-Konfigurasi saat ini ada di [app/config/mediamtx.yml](/Users/macbook/Workdir/Office/Projects/drone/service-rec-drone-mission/app/config/mediamtx.yml).
-
-Pilihan desain:
-
-- RTSP aktif di `8554`
-- HLS aktif di `8888` dengan low-latency HLS
-- WebRTC aktif di `8889`
-- `Control API` aktif di `9997`
-- `Metrics` aktif di `9998`
-- logging terstruktur aktif
-- recording aktif untuk semua path `uav/...`
-- format recording menggunakan `fmp4` agar recorder bisa mengambil part `.mp4` native
-
-### Bentuk Output HLS
-
-Alur sumber live adalah:
-
-1. Kamera/HM30 menyediakan RTSP pada `RTSP_URL`
-2. FFmpeg meng-ingest RTSP tersebut
-3. FFmpeg mem-publish ulang ke MediaMTX lokal pada:
-   `rtsp://<mediamtx-host>:8554/uav/<resolved_uav_id>/live`
-4. MediaMTX otomatis me-remux stream RTSP itu menjadi HLS
-5. Frontend atau player membaca HLS dari:
-   `http://<mediamtx-host>:8888/uav/<resolved_uav_id>/live/index.m3u8`
-
-Contoh jika host lokal dan `resolved_uav_id=1`:
-
-```text
-http://127.0.0.1:8888/uav/1/live/index.m3u8
-```
-
-Perilaku penting:
-
-- HLS dibuat oleh MediaMTX, bukan oleh FFmpeg
-- HLS hanya tersedia jika FFmpeg sedang aktif mem-publish ke path RTSP yang sesuai
-- Jika `IDLE_STREAM_ENABLED=true`, URL HLS bisa tetap hidup di luar window recording mission selama konektivitas vehicle sehat
-- Jika UAV disconnect atau publisher berhenti, output HLS ikut berhenti update karena tidak ada lagi upstream stream aktif
-
-### File HLS Lokal
-
-MediaMTX menulis artifact HLS ke directory:
-
-```text
-/app/hls
-```
-
-Pada Docker Compose, directory itu di-mount dari folder repo:
-
-```text
-./hls
-```
-
-Artinya:
-
-- playlist dan segment HLS dihasilkan lokal di disk
-- file yang sama juga disajikan lewat HTTP pada port `8888`
-- `./hls` adalah output runtime dan di-ignore oleh Git
-
-Directory `./hls` diperlakukan sebagai area penyajian sementara, bukan arsip recording final. Arsip mission final tetap dipisahkan ke bawah `records/`.
-
-### Pengaturan Low-Latency HLS
-
-Pengaturan HLS saat ini di [app/config/mediamtx.yml](/Users/macbook/Workdir/Office/Projects/drone/service-rec-drone-mission/app/config/mediamtx.yml):
-
-- `hlsVariant: lowLatency`
-- `hlsSegmentCount: 4`
-- `hlsSegmentDuration: 1s`
-- `hlsPartDuration: 200ms`
-- `hlsAlwaysRemux: yes`
-
-Kenapa ini penting:
-
-- segment pendek mengurangi waktu startup player
-- part low-latency menurunkan delay live edge
-- always-remux memastikan HLS siap segera setelah ada publisher aktif
-
-### HLS dan Recording
-
-HLS dan recording adalah dua output berbeda dari path input MediaMTX yang sama:
-
-- HLS untuk pemutaran live di browser atau player
-- recording untuk arsip mission dan review setelah penerbangan
-
-Dalam stack ini:
-
-- HLS disajikan dari `./hls`
-- fragmen raw `fMP4` ditulis di `./records/_raw/...`
-- arsip mission final disusun di:
-  `records/drone_<drone_id>/<year>/<month>/mission_<history_id>/`
-
-Jadi jika pertanyaannya adalah "nanti output HLS-nya gimana", jawaban praktisnya:
-
-- output URL: `http://127.0.0.1:8888/uav/<resolved_uav_id>/live/index.m3u8`
-- output di disk: dibuat di `./hls`
-- dependensi sumber: hanya hidup selama MediaMTX lokal masih menerima RTSP publisher
-
-### Control API dan Metrics
-
-Port `9997` adalah `Control API` MediaMTX.
-
-Dipakai untuk:
-
-- health check aplikasi
-- memeriksa apakah MediaMTX hidup
-- melihat path dan publisher yang aktif
-
-Contoh:
-
-```text
-GET http://127.0.0.1:9997/v3/paths/list
-```
-
-Port `9998` adalah endpoint `Metrics` MediaMTX.
-
-Dipakai untuk:
-
-- monitoring
-- scraping Prometheus
-- melihat traffic runtime dan jumlah stream
-
-Contoh:
-
-```text
-GET http://127.0.0.1:9998/metrics
-```
-
-Untuk project ini:
-
-- `9997` penting secara operasional
-- `9998` opsional tetapi berguna untuk monitoring produksi
-
-Konfigurasi ini mengikuti referensi resmi MediaMTX untuk file konfigurasi dan `Control API`:
-
-- `api: yes` dan `GET /v3/paths/list` untuk health check
-- `record: yes`, `recordPath`, `recordFormat: fmp4`
-- `hlsVariant: lowLatency`, `hlsSegmentDuration`, `hlsPartDuration`
-
-Sumber:
-
-- https://mediamtx.org/docs/references/configuration-file
-- https://mediamtx.org/docs/features/control-api
-
-## Docker Compose
-
-## Konfigurasi Docker Compose
-
-File Compose ada di [docker/docker-compose.yml](/Users/macbook/Workdir/Office/Projects/drone/service-rec-drone-mission/docker/docker-compose.yml).
-
-Service:
-
-- `mediamtx`: image resmi MediaMTX, mengekspose RTSP/HLS/WebRTC/API/metrics, serta menyimpan recording dan aset HLS lewat volume mount
-- `app`: orkestrator Python dengan FFmpeg terpasang, bergantung pada health MediaMTX
-
-Perilaku jaringan Docker:
-
-- jika `BASE_URL` atau `RTSP_URL` masih memakai `localhost` atau `127.0.0.1`, container `app` akan me-resolve host tersebut ke `host.docker.internal`
-- ini membuat service lokal host dan stream lokal host tetap bisa diakses dari dalam container tanpa patch `.env` tambahan
-
-Port yang diekspos:
-
-- `8554` RTSP
-- `8888` HLS
-- `8889` endpoint HTTP WebRTC
-- `9997` `Control API`
-- `9998` `Metrics`
-
-Jika ingin membatasi port eksternal hanya ke empat port utama, `9998` bisa tidak diekspos ke host dan tetap dipakai internal.
-
-## Contoh Pipeline FFmpeg
-
-### 1. RTSP input -> MediaMTX, mode copy
+## Cara Jalan
+
+Butuh:
+- `python3`
+- `ffmpeg`
+
+Catatan:
+- `./scripts/start.sh` akan otomatis load variabel dari file `.env`
+- `./scripts/start.sh` akan otomatis membuat `.venv` jika belum ada
+- `./scripts/start.sh` juga akan otomatis install dependency Python dari `requirements.txt` jika belum terpasang
+- `ffmpeg` tetap harus sudah terinstall di komputer dan tersedia di `PATH`
+- `./scripts/start.sh` sekarang jalan di foreground, cocok untuk run biasa atau dipanggil oleh `systemd`
+
+Install dependency Python manual jika diperlukan:
 
 ```bash
-ffmpeg -hide_banner -loglevel warning \
-  -rtsp_transport tcp -fflags nobuffer -flags low_delay \
-  -i rtsp://192.168.144.25:8554/main.264 \
-  -map 0:v:0 -c:v copy -an \
-  -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/uav/1/live
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-### 2. RTSP input -> MediaMTX, re-encode H.264
-
-```bash
-ffmpeg -hide_banner -loglevel warning \
-  -rtsp_transport tcp -fflags nobuffer -flags low_delay \
-  -i rtsp://192.168.144.25:8554/main.264 \
-  -map 0:v:0 -vf format=yuv420p \
-  -c:v libx264 -preset veryfast -tune zerolatency \
-  -profile:v baseline -level:v 3.1 \
-  -g 30 -keyint_min 30 -sc_threshold 0 -bf 0 \
-  -b:v 2500k -maxrate 3000k -bufsize 5000k -an \
-  -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/uav/1/live
-```
-
-## Menjalankan dan Deploy
-
-Mode Docker:
+Jalankan service:
 
 ```bash
 ./scripts/start.sh
-./scripts/healthcheck.sh
+```
+
+Mode jalannya:
+- manual: jalankan `./scripts/start.sh`, lalu stop dengan `Ctrl+C`
+- systemd: panggil script ini sebagai `ExecStart`, jangan di-background-kan
+
+Stop service:
+
+```bash
 ./scripts/stop.sh
 ```
 
-Endpoint penting setelah boot:
+`stop.sh` sekarang hanya reminder, karena service tidak lagi pakai PID file/background mode.
 
-- RTSP: `rtsp://127.0.0.1:8554/uav/<drone_id>/live`
-- HLS: `http://127.0.0.1:8888/uav/<drone_id>/live/index.m3u8`
-- WebRTC WHEP: `http://127.0.0.1:8889/uav/<drone_id>/live/whep`
-- API: `http://127.0.0.1:9997/v3/paths/list`
-- Metrics: `http://127.0.0.1:9998/metrics`
+Kalau startup gagal sebelum logger aplikasi aktif, jalankan langsung:
 
-## Cara Meminimalkan Latensi
+```bash
+./scripts/start.sh
+```
 
-Pada operasi live UAV, latensi biasanya didominasi oleh GOP cadence, buffering player, dan perpindahan protokol. Aturan praktisnya:
+Kalau service berhasil boot, log utama ada di:
 
-- gunakan `-c:v copy` jika stream HM30 sudah H.264 dan kompatibel dengan client
-- jika perlu re-encode, pertahankan `-tune zerolatency`, `-bf 0`, GOP pendek, dan bitrate moderat
-- pertahankan HLS low-latency dengan segment `1s` dan part `200ms`
-- gunakan RTSP over TCP secara lokal antara FFmpeg dan MediaMTX agar perilakunya deterministik
-- jadikan WebRTC opsional untuk operator yang butuh latency browser paling rendah
-- hindari double encoding dan hindari tee output FFmpeg
+```bash
+logs/app.log
+logs/ffmpeg.stdout.log
+logs/ffmpeg.stderr.log
+```
 
-## Catatan Optimasi Raspberry Pi
+## URL Lokal
 
-- Gunakan `FFMPEG_CODEC=copy` jika kamera sudah mengirim H.264
-- Jika re-encode wajib, lebih baik turunkan resolusi sumber atau bitrate dari sisi kamera/encoder sebelum membebani CPU lokal
-- Pertahankan `rtspTransports: [tcp]` untuk stabilitas kecuali jaringan lokal benar-benar bagus dan UDP memang dibutuhkan
-- Jalankan aplikasi dan MediaMTX di host yang sama untuk menghindari hop tambahan
-- Gunakan SSD atau media flash yang cepat jika recording kontinu diaktifkan
-- Hardware encoder bisa ditambahkan nanti tanpa mengubah antarmuka orkestrasi
+- Player: `http://127.0.0.1:8088/player`
+- Playlist HLS: `http://127.0.0.1:8088/hls/uav/<drone_id>/index.m3u8`
+- Health: `http://127.0.0.1:8088/health`
+
+Penting:
+- URL HLS sekarang memakai `uav_id` di path.
+- Jika `drone_id` efektif adalah `1`, akses live stream menjadi:
+  `http://127.0.0.1:8088/hls/uav/1/index.m3u8`
+- `drone_id` efektif diambil dari `device-context`.
+- Jika `device-context` gagal, fallback ke `SUBSCRIBE_UAV_ID`.
+
+## API Contract
+
+Base URL lokal default:
+
+```text
+http://127.0.0.1:8088
+```
+
+### `GET /health`
+
+Fungsi:
+- cek status service lokal
+- lihat state runtime saat ini
+- lihat URL HLS aktif
+
+Response contoh:
+
+```json
+{
+  "status": "ok",
+  "runtime_state": "STREAMING",
+  "hls_url": "http://127.0.0.1:8088/hls/uav/1/index.m3u8",
+  "playlist_exists": true,
+  "playlist_size": 342
+}
+```
+
+Field:
+- `status`: status endpoint lokal, saat ini selalu `"ok"` jika request berhasil
+- `runtime_state`: salah satu dari `IDLE`, `CONNECTED`, `STREAMING`, `RECORDING`, `DISCONNECTED`
+- `hls_url`: URL HLS aktif yang harus dipakai frontend
+- `playlist_exists`: apakah file playlist HLS sudah ada di disk
+- `playlist_size`: ukuran file playlist dalam byte
+
+### `GET /stream-info`
+
+Fungsi:
+- memberikan kontrak ringan untuk frontend
+- memberi tahu `drone_id` aktif dan URL HLS final
+
+Response contoh:
+
+```json
+{
+  "drone_id": "1",
+  "hls_url": "http://127.0.0.1:8088/hls/uav/1/index.m3u8",
+  "player_url": "http://127.0.0.1:8088/player"
+}
+```
+
+Field:
+- `drone_id`: UAV ID efektif yang dipakai service
+- `hls_url`: URL playlist HLS final
+- `player_url`: URL player lokal bawaan
+
+Catatan:
+- frontend sebaiknya baca `hls_url` dari endpoint ini, bukan hardcode path sendiri
+
+### `GET /player`
+
+Fungsi:
+- player lokal bawaan untuk verifikasi cepat
+
+Response:
+- `text/html`
+
+Catatan:
+- player akan memanggil `/stream-info`
+- lalu player memutar `hls_url` yang dikembalikan endpoint itu
+
+### `GET /hls/uav/{drone_id}/index.m3u8`
+
+Fungsi:
+- playlist HLS live utama
+
+Response:
+- content type HLS playlist
+- isi file berasal dari output FFmpeg di disk
+
+Contoh:
+
+```text
+GET /hls/uav/1/index.m3u8
+```
+
+Catatan:
+- endpoint ini hanya valid jika `drone_id` cocok dengan `drone_id` aktif service
+- source of truth untuk URL final tetap `/stream-info`
+
+### `GET /hls/uav/{drone_id}/{segment}`
+
+Fungsi:
+- mengambil segment HLS `.ts`
+
+Contoh:
+
+```text
+GET /hls/uav/1/segment_000001.ts
+```
+
+Catatan:
+- file ini dipakai player setelah membaca `index.m3u8`
+- segment akan berganti terus selama live stream berjalan
+
+### `GET /records/...`
+
+Fungsi:
+- expose file hasil recording mission
+
+Contoh path:
+
+```text
+/records/drone_1/2026/05/mission_123.mp4
+/records/drone_1/2026/05/mission_123.json
+```
+
+Catatan:
+- path final mengikuti `drone_id`, tahun, bulan, dan `history_id`
+- file `.mp4` adalah hasil recording mission
+- file `.json` adalah metadata sederhana mission recording
+
+## Logika Runtime
+
+State runtime sengaja sederhana:
+
+- websocket putus atau vehicle `connected=false` -> FFmpeg stop
+- websocket aktif + vehicle connected + bukan mission -> HLS only
+- mission start -> FFmpeg restart ke mode `HLS + MP4`
+- mission stop -> FFmpeg kembali ke mode `HLS only`
+
+Mission dikendalikan oleh event websocket yang sudah ada:
+- `vehicle_state`
+- `mission_event`
+
+Jika `mission_event` membawa `history_id`, nilai itu dipakai untuk nama file MP4. Jika tidak ada, fallback ke timestamp lokal.
+
+## Output File
+
+HLS live:
+
+```text
+./hls/uav/<drone_id>/index.m3u8
+./hls/uav/<drone_id>/segment_000001.ts
+...
+```
+
+Recording mission:
+
+```text
+./records/drone_<id>/<year>/<month>/mission_<history_id>.mp4
+./records/drone_<id>/<year>/<month>/mission_<history_id>.json
+```
+
+File `.json` berisi metadata sederhana:
+- `history_id`
+- `drone_id`
+- `output_file`
+- `started_at_epoch`
+- `finished_at_epoch`
+
+## Variabel Penting
+
+Contoh ada di [.env.example](/Users/macbook/Workdir/Office/Projects/drone/service-rec-drone-mission/.env.example:1).
+
+Yang paling penting:
+- `BASE_URL`
+- `TOKEN`
+- `SUBSCRIBE_UAV_ID`
+- `RTSP_URL`
+- `FFMPEG_CODEC`
+- `HLS_TIME_SECONDS`
+- `HLS_LIST_SIZE`
+- `SERVER_PORT`
+- `PUBLIC_BASE_URL`
+
+Keterangan praktis:
+- `SUBSCRIBE_UAV_ID=1`
+  artinya service subscribe telemetry untuk UAV `1`.
+- Jika backend `device-context` berhasil, `drone_id` dari backend dipakai untuk URL HLS dan penamaan folder recording.
+- Jika `device-context` gagal, fallback ke `SUBSCRIBE_UAV_ID`.
+- Dengan config default di atas, URL yang dibuka frontend tetap:
+  `http://127.0.0.1:8088/hls/uav/<drone_id>/index.m3u8`
+- Player bawaan ada di:
+  `http://127.0.0.1:8088/player`
+
+Contoh:
+- jika `SUBSCRIBE_UAV_ID=1` dan `device-context` fallback ke ID itu, stream live ada di:
+  `http://127.0.0.1:8088/hls/uav/1/index.m3u8`
+- file record akan masuk ke folder seperti:
+  `./records/drone_1/2026/05/mission_<history_id>.mp4`
+  jika `device-context` fallback ke ID `1`
+
+## Catatan FFmpeg
+
+Default yang paling ringan untuk Raspberry Pi dan macOS:
+
+```env
+FFMPEG_CODEC=copy
+```
+
+Kalau source RTSP bukan H.264 yang cocok untuk HLS, baru ganti ke:
+
+```env
+FFMPEG_CODEC=libx264
+```
+
+Mode encode saat ini memakai konfigurasi low-latency:
+- `ultrafast`
+- `zerolatency`
+- GOP pendek
+- rolling HLS segment
+
+## File Inti
+
+- [app/streaming/pipeline.py](/Users/macbook/Workdir/Office/Projects/drone/service-rec-drone-mission/app/streaming/pipeline.py:1): keputusan mode `disconnected / idle / mission`
+- [app/streaming/ffmpeg_manager.py](/Users/macbook/Workdir/Office/Projects/drone/service-rec-drone-mission/app/streaming/ffmpeg_manager.py:1): build command FFmpeg dan restart tunggal
+- [app/http_server.py](/Users/macbook/Workdir/Office/Projects/drone/service-rec-drone-mission/app/http_server.py:1): FastAPI untuk `/hls`, `/records`, `/player`, `/health`
+- [app/websocket/client.py](/Users/macbook/Workdir/Office/Projects/drone/service-rec-drone-mission/app/websocket/client.py:1): koneksi websocket dan reconnect
+
+Player `/player` di-render langsung dari FastAPI, jadi tidak ada folder `static/` terpisah.
+
+## Verifikasi Cepat
+
+1. Jalankan `./scripts/start.sh`
+2. Buka `/player`
+3. Pastikan `vehicle_state.connected=true`
+4. Saat mission mulai, cek file MP4 muncul di `records/`
+5. Saat mission selesai, file MP4 berhenti bertambah dan `.json` metadata ditulis
