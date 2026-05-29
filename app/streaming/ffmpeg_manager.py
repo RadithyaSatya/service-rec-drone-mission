@@ -109,8 +109,6 @@ class FFmpegManager:
         return [
             "-rtsp_transport",
             self._settings.ffmpeg_transport,
-            "-rw_timeout",
-            "5000000",
             "-fflags",
             "nobuffer",
             "-flags",
